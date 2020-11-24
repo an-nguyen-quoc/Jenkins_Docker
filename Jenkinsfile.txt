@@ -1,0 +1,71 @@
+pipeline {
+    options { disableConcurrentBuilds() }
+    agent {
+        node{
+            label 'master'
+            customWorkspace 'C:\\JenkinsWorkspace'
+        }
+    }
+    environment {
+        GIT_URL = 'https://github.com/an-nguyen-quoc/Jenkins_Docker.git'
+        PROXY='http://10.116.16.12:3128'
+        DBHOST='An_Host'
+        TESTSERVER='10.116.224.112'
+        DEPLOY_ENV='An_Test'
+    }
+    stages {
+        stage('Clean up environment') {
+            steps {                
+                dir("${env.WORKSPACE}"){
+                    echo 'Clean folder'
+                    bat "IF EXIST ${DEPLOY_ENV} (rmdir .\\${DEPLOY_ENV} /s /q)"
+                    bat "mkdir ${DEPLOY_ENV}"
+                    bat "cd ${DEPLOY_ENV} && mkdir main && mkdir data"
+                    script {
+                        try {
+                            bat "FOR /f \"tokens=*\" %%i IN ('docker images -q -f \"dangling=true\"') DO docker rmi %%i"
+                        } catch (err) {
+                            echo err.getMessage()
+                        }
+                    }
+                }
+            }
+        }
+        stage('Checkout source code') {
+            steps {
+                dir("${env.WORKSPACE}\\${DEPLOY_ENV}\\main"){
+                    echo 'Start getting source code from main GIT'
+                    withCredentials([usernamePassword(credentialsId: 'git_user', passwordVariable:'pass', usernameVariable: 'user')]){
+                        git url:"${GIT_URL}",
+                            credentialsId: "git_user",
+                            branch: "master"
+                    }
+                }
+                
+                dir("${env.WORKSPACE}\\${DEPLOY_ENV}\\main"){
+                    echo 'set environment variables'
+                    bat "npm config set proxy ${PROXY}"
+                    echo 'Installing packages'
+                    bat "npm install"
+                }
+                
+                dir("${env.WORKSPACE}\\${DEPLOY_ENV}\\main"){
+                    echo 'Build source code'
+                    bat "set FLXP_SKIP_ESLINT=true&&npm run build"
+                    bat "set FLXP_SKIP_ESLINT=true&&npm run build:lang"
+                    bat "set FLXP_SKIP_ESLINT=true&&npm run build:server"
+                }
+            }
+        }
+        
+        stage('Build images') {
+            steps {
+                dir("${env.WORKSPACE}\\${DEPLOY_ENV}\\main"){
+                    sh "IMAGETAG=${DEPLOY_ENV} docker-compose build --build-arg DBNAME=flpdb_${DEPLOY_ENV} --build-arg DBHOST=${DBHOST}-${DEPLOY_ENV.toLowerCase()} --build-arg HTTP_PROXY=${PROXY} --build-arg HTTPS_PROXY=${PROXY}"
+                    sh "IMAGETAG=${DEPLOY_ENV} docker-compose push"
+                }
+            }
+        }
+        
+    }
+}
